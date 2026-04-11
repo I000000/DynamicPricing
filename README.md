@@ -45,6 +45,43 @@ curl -X POST http://localhost:8000/optimize -F "file=@sample.csv"
 - **Grafana:** http://localhost:3000 (admin/admin)  
   Дашборд **«Dynamic Pricing Worker Monitoring»** показывает метрики обработки задач.
 
+## Структура проекта
+
+```text
+dynamic-pricing/
+├── frontend/               # React + TypeScript (пользовательский интерфейс)
+│   ├── src/                # Исходный код React-приложения
+│   ├── nginx.conf          # Конфигурация Nginx для проксирования API
+│   └── Dockerfile          # Сборка контейнера фронтенда
+├── gateway/                # Go API Gateway (приём файлов, очередь RabbitMQ)
+│   ├── main.go             # Основной код шлюза
+│   ├── go.mod              # Зависимости Go
+│   └── Dockerfile          # Сборка контейнера Gateway
+├── inference/              # FastAPI синхронный инференс (опционально)
+│   ├── app.py              # Эндпоинты /predict, /optimize, /metrics
+│   ├── requirements.txt    # Python-зависимости
+│   └── Dockerfile          # Сборка контейнера инференса
+├── worker/                 # Python воркер очереди RabbitMQ
+│   ├── worker.py           # Асинхронная обработка задач
+│   ├── requirements.txt    # Python-зависимости
+│   └── Dockerfile          # Сборка контейнера воркера
+├── models/                 # Обученные модели CatBoost (.cbm)
+│   └── catboost_model_tuned.cbm   # Финальная модель (не в Git)
+├── data/                   # Данные (сырые, обработанные, тестовые)
+│   └── test_samples/       # Тестовые CSV для загрузки
+├── prometheus/             # Конфигурация мониторинга
+│   └── prometheus.yml      # Настройки скрейпинга метрик
+├── grafana/                # Дашборды Grafana
+│   └── dashboards/         # JSON-файлы дашбордов
+├── docs/                   # Отчёты по лабораторным работам
+│   ├── lab1_report.md
+│   ├── lab2_report.md
+│   ├── lab3_report.md
+│   └── lab4_report.md
+├── docker-compose.yml      # Оркестрация всех сервисов
+└── README.md               # Документация проекта
+```
+
 ## Архитектура
 
 ```mermaid
