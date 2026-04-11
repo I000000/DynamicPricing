@@ -14,6 +14,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/gorilla/mux"
 	_ "github.com/lib/pq"
+	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/streadway/amqp"
 )
@@ -32,18 +33,30 @@ var (
 	db      *sql.DB
 	channel *amqp.Channel
 	queue   amqp.Queue
+
+	// Метрики Prometheus
+	httpRequestsTotal = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "http_requests_total",
+			Help: "Total number of HTTP requests",
+		},
+		[]string{"method", "endpoint"},
+	)
+	httpRequestDuration = prometheus.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Name:    "http_request_duration_seconds",
+			Help:    "HTTP request duration in seconds",
+			Buckets: prometheus.DefBuckets,
+		},
+		[]string{"method", "endpoint"},
+	)
 )
 
-func loggingMiddleware(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		start := time.Now()
-		log.Printf("→ %s %s", r.Method, r.URL.Path)
-		next.ServeHTTP(w, r)
-		log.Printf("← %s %s [%v]", r.Method, r.URL.Path, time.Since(start))
-	})
-}
-
 func init() {
+	// Регистрируем метрики
+	prometheus.MustRegister(httpRequestsTotal)
+	prometheus.MustRegister(httpRequestDuration)
+
 	// Redis
 	redisURL := os.Getenv("REDIS_URL")
 	if redisURL == "" {
@@ -68,7 +81,7 @@ func init() {
 		log.Fatalf("DB ping failed: %v", err)
 	}
 
-	// RabbitMQ с повторными попытками
+	// RabbitMQ
 	rabbitURL := os.Getenv("RABBITMQ_URL")
 	if rabbitURL == "" {
 		rabbitURL = "amqp://guest:guest@localhost:5672/"
@@ -79,10 +92,8 @@ func init() {
 	if err != nil {
 		log.Fatalf("Failed to declare queue: %v", err)
 	}
-	// conn нужно сохранить, чтобы не закрылось соединение? Можно в глобальную переменную, но не обязательно
 }
 
-// Новая функция
 func connectRabbitMQ(url string) (*amqp.Connection, *amqp.Channel) {
 	var conn *amqp.Connection
 	var err error
@@ -104,24 +115,63 @@ func connectRabbitMQ(url string) (*amqp.Connection, *amqp.Channel) {
 	return conn, ch
 }
 
+// middleware для сбора метрик
+func metricsMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		start := time.Now()
+		// Оборачиваем ResponseWriter, чтобы захватить код ответа
+		ww := &responseWriter{ResponseWriter: w, statusCode: http.StatusOK}
+		next.ServeHTTP(ww, r)
+		duration := time.Since(start).Seconds()
+
+		// Инкрементируем счётчик и наблюдаем длительность
+		httpRequestsTotal.WithLabelValues(r.Method, r.URL.Path).Inc()
+		httpRequestDuration.WithLabelValues(r.Method, r.URL.Path).Observe(duration)
+	})
+}
+
+// responseWriter для перехвата статус-кода
+type responseWriter struct {
+	http.ResponseWriter
+	statusCode int
+}
+
+func (rw *responseWriter) WriteHeader(code int) {
+	rw.statusCode = code
+	rw.ResponseWriter.WriteHeader(code)
+}
+
 func main() {
 	r := mux.NewRouter()
-	r.Use(loggingMiddleware)
 
+	// Логирование и метрики
+	r.Use(loggingMiddleware)
+	r.Use(metricsMiddleware)
+
+	// Метрики Prometheus
 	r.Handle("/metrics", promhttp.Handler())
 
-	// Upload endpoint
-	r.HandleFunc("/upload", uploadHandler).Methods("POST")
-	// Task status endpoint
-	r.HandleFunc("/task/{id}", taskHandler).Methods("GET")
-
+	// Healthcheck
 	r.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte("OK"))
 	}).Methods("GET")
 
+	// API
+	r.HandleFunc("/upload", uploadHandler).Methods("POST")
+	r.HandleFunc("/task/{id}", taskHandler).Methods("GET")
+
 	log.Println("Gateway listening on :8080")
 	log.Fatal(http.ListenAndServe(":8080", r))
+}
+
+func loggingMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		start := time.Now()
+		log.Printf("→ %s %s", r.Method, r.URL.Path)
+		next.ServeHTTP(w, r)
+		log.Printf("← %s %s [%v]", r.Method, r.URL.Path, time.Since(start))
+	})
 }
 
 func uploadHandler(w http.ResponseWriter, r *http.Request) {
@@ -160,7 +210,6 @@ func uploadHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	log.Printf("Task %s published to queue", taskID)
 
-	// Кешируем в Redis
 	if err := rdb.SetEX(context.Background(), "task:"+taskID, `{"status":"pending"}`, time.Hour).Err(); err != nil {
 		log.Printf("WARN redis set: %v", err)
 	}
