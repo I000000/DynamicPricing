@@ -14,7 +14,7 @@
 - 8+ ГБ свободной RAM (для GPU-ускорения требуется NVIDIA Docker)
 ## Установка и запуск
 1. Склонируйте репозиторий.
-2. Поместите обученную модель `catboost_model_tuned.cbm` в папку `models/`.
+2. Поместите обученную модель [`catboost_model_tuned.cbm`](https://huggingface.co/asdsadsdaa/catboost_model_tuned/resolve/main/catboost_model_tuned.cbm?download=true) в папку `models/`.
 3. Выполните в корне проекта:
  ```bash
  docker-compose up --build
